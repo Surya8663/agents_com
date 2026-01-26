@@ -1,0 +1,25 @@
+# Virtual environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# OS / invalid files
+nul
+NUL
+
+# Data & artifacts
+data/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# ML / model weights (optional but recommended)
+*.pt
+
+# Environment files
+.env
