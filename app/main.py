@@ -71,7 +71,7 @@ from app.api.ingest import router as ingest_router
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.API_VERSION,
-    description="Multi-Modal Document Intelligence System - Phase 1 & 2: Document Ingestion & Layout Analysis"
+    description="Multi-Modal Document Intelligence System - All Phases"
 )
 
 # Configure CORS
@@ -99,47 +99,58 @@ async def health_check():
         "status": "healthy",
         "service": settings.APP_NAME,
         "version": settings.API_VERSION,
-        "phases": ["Phase 1: Document Ingestion", "Phase 2: Layout Analysis"]
+        "phases": [
+            "Phase 1: Document Ingestion",
+            "Phase 2: Layout Analysis", 
+            "Phase 3: OCR",
+            "Phase 4: Multi-Modal Agents"
+        ]
     }
 
 # ============================================================================
-# LAZY LOAD PHASE 2 & 3 ROUTERS (Prevents segmentation fault)
+# LAZY LOAD PHASE 2, 3 & 4 ROUTERS
 # ============================================================================
-# Test import
-try:
-    from app.api.ocr import router
-    print("✅ OCR router import successful")
-except Exception as e:
-    print(f"❌ OCR router import failed: {e}")
-    import traceback
-    traceback.print_exc()
-    
 @app.on_event("startup")
 async def startup_event():
-    """Initialize Phase 2 and 3 routers on startup."""
+    """Initialize Phase 2, 3 and 4 routers on startup."""
+    # Phase 2: Layout Analysis
     try:
-        # Phase 2: Layout Analysis
         from app.api.layout import router as layout_router
         app.include_router(layout_router, prefix="/layout", tags=["layout"])
         print("✅ Phase 2 (Layout Analysis) router loaded")
     except Exception as e:
         print(f"⚠️  Phase 2 router failed: {e}")
-        # Create minimal fallback endpoint
         @app.get("/layout/fallback")
         async def layout_fallback():
             return {"error": "Layout analysis temporarily unavailable"}
     
-    try:
     # Phase 3: OCR
+    try:
         from app.api.ocr import router as ocr_router
-        app.include_router(ocr_router)  # ✅ CORRECT - No prefix needed
+        app.include_router(ocr_router)  # No prefix needed
         print("✅ Phase 3 (OCR) router loaded")
     except Exception as e:
         print(f"⚠️  Phase 3 router failed: {e}")
-        # Create minimal fallback endpoint
         @app.get("/ocr/fallback")
         async def ocr_fallback():
             return {"error": "OCR temporarily unavailable"}
+    
+    # Phase 4: Multi-Modal Agents
+    try:
+        from app.api.agents import router as agents_router
+        app.include_router(agents_router)  # Already has /agents prefix
+        print("✅ Phase 4 (Multi-Modal Agents) router loaded")
+        print("   - Vision Agent: Layout intelligence")
+        print("   - Text Agent: Semantic extraction")
+        print("   - Fusion Agent: Multi-modal alignment")
+        print("   - Validation Agent: Confidence scoring")
+        print("   - LLM: Qwen-2.5-Instruct (open-source)")
+        print("   - Vector DB: Qdrant for RAG")
+    except Exception as e:
+        print(f"⚠️  Phase 4 router failed: {e}")
+        @app.get("/agents/fallback")
+        async def agents_fallback():
+            return {"error": "Agent intelligence temporarily unavailable"}
 
 # ============================================================================
 # INFORMATION ENDPOINTS
@@ -161,7 +172,7 @@ async def service_info():
             }
         ],
         "data_directory": str(settings.BASE_DATA_DIR.absolute()),
-        "current_phase": 3
+        "current_phase": 4
     }
     
     # Dynamically add available phases
@@ -192,6 +203,24 @@ async def service_info():
                 "GET /ocr/status/{document_id}",
                 "GET /ocr/results/{document_id}",
                 "GET /ocr/engine/info"
+            ]
+        })
+    except:
+        pass
+    
+    try:
+        from app.api.agents import router as agents_router
+        info["phases"].append({
+            "phase": 4,
+            "name": "Agent-Based Multi-Modal Reasoning & Fusion",
+            "description": "LLM-powered agents for vision-text fusion, validation, and vector RAG",
+            "endpoints": [
+                "POST /agents/run/{document_id}",
+                "GET /agents/status/{document_id}",
+                "GET /agents/result/{document_id}",
+                "POST /agents/query",
+                "GET /agents/vector/info",
+                "GET /agents/llm/info"
             ]
         })
     except:
@@ -250,6 +279,19 @@ if __name__ == "__main__":
         print("  GET  /ocr/engine/info      - Get OCR engine info")
     except:
         print("- Phase 3: Not available (import error)")
+    
+    # Check Phase 4 availability
+    try:
+        from app.api.agents import router as agents_router
+        print("- Phase 4:")
+        print("  POST /agents/run/{id}      - Start multi-agent reasoning")
+        print("  GET  /agents/status/{id}   - Check agent pipeline status")
+        print("  GET  /agents/result/{id}   - Get structured understanding")
+        print("  POST /agents/query         - Multi-modal RAG query")
+        print("  GET  /agents/vector/info   - Vector DB information")
+        print("  GET  /agents/llm/info      - LLM configuration")
+    except:
+        print("- Phase 4: Not available (import error)")
     
     print("- System:")
     print("  GET  /health               - Health check")

@@ -1,94 +1,117 @@
-# verify_phase3.py
-"""
-Verify Phase 3 is working correctly.
-"""
-import sys
-from pathlib import Path
+# test_with_proper_timeouts.py
+import requests
+import time
+import json
 
-# Add project root
-sys.path.insert(0, str(Path(__file__).parent))
-
-print("🔍 Verifying Phase 3 OCR System")
+print("🚀 Testing with Proper Timeouts")
 print("=" * 60)
 
+# Create a simple PDF
+from reportlab.pdfgen import canvas
+c = canvas.Canvas("timeout_test.pdf")
+c.drawString(100, 700, "Invoice #: TEST-TIMEOUT-001")
+c.drawString(100, 680, "Date: March 1, 2024")
+c.drawString(100, 660, "Customer: Timeout Test Inc.")
+c.drawString(100, 640, "Amount: $250.00")
+c.drawString(100, 620, "Status: Paid")
+c.save()
+
+print("1. Uploading document...")
+with open("timeout_test.pdf", "rb") as f:
+    files = {'file': ('timeout_test.pdf', f, 'application/pdf')}
+    response = requests.post("http://localhost:8000/ingest/upload", files=files, timeout=60)
+    
+if response.status_code == 200:
+    doc_id = response.json().get('document_id')
+    print(f"✅ Document uploaded: {doc_id}")
+else:
+    print(f"❌ Upload failed: {response.status_code}")
+    exit()
+
+print("\n2. Starting Phase 2 (Layout) - This may take 60+ seconds...")
 try:
-    # Test 1: Import OCR components
-    from app.ocr.engine import OCRManager
-    from app.ocr.schema import OCRBoundingBox, OCRRegionResult, PageOCRResult
-    from app.ocr.processor import OCRProcessor
-    from app.ocr.region_cropper import RegionCropper
-    
-    print("✅ All Phase 3 modules imported")
-    
-    # Test 2: Initialize OCR Manager
-    print("\n🔧 Testing OCR Manager...")
-    manager = OCRManager(lang='en')
-    info = manager.get_info()
-    
-    print(f"   Engine: {info['engine']}")
-    print(f"   Mode: {info['mode']}")
-    print(f"   Language: {info['language']}")
-    
-    # Test 3: OCR Extraction
-    print("\n📝 Testing OCR Extraction...")
-    import numpy as np
-    import cv2
-    
-    # Create test image with realistic document text
-    img = np.ones((200, 400, 3), dtype=np.uint8) * 240  # Light gray
-    cv2.rectangle(img, (20, 30), (380, 80), (255, 255, 255), -1)
-    cv2.putText(img, "INVOICE #2024-001", (40, 65), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
-    
-    cv2.rectangle(img, (20, 100), (380, 180), (255, 255, 255), -1)
-    cv2.putText(img, "Date: 2024-01-24", (40, 130), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
-    cv2.putText(img, "Amount: $1,234.56", (40, 160), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
-    
-    text, confidence, boxes = manager.extract_text(img, "invoice_header")
-    
-    print(f"   Text extracted: {'Yes' if text else 'No'}")
-    if text:
-        print(f"   Preview: {text[:60]}...")
-        print(f"   Confidence: {confidence:.3f}")
-        print(f"   Word boxes: {len(boxes)}")
-    
-    # Test 4: Schemas
-    print("\n📋 Testing OCR Schemas...")
-    bbox = OCRBoundingBox(x1=0.1, y1=0.2, x2=0.5, y2=0.6)
-    region = OCRRegionResult(
-        region_id="r1",
-        type="text_block",
-        bbox=bbox,
-        ocr_text=text or "Sample extracted text",
-        ocr_confidence=confidence or 0.85,
-        engine=info['engine']
-    )
-    
-    print(f"   OCRBoundingBox: {bbox}")
-    print(f"   OCRRegionResult: {region.region_id} ({region.type})")
-    
-    # Test 5: Complete Flow
-    print("\n⚙️  Testing Complete OCR Flow...")
-    processor = OCRProcessor(lang='en')
-    print(f"   OCR Processor: {processor.ocr_manager.engine_name}")
-    
-    print("\n" + "=" * 60)
-    print("🎉 PHASE 3 VERIFICATION COMPLETE!")
-    print("=" * 60)
-    print("\n✅ All components working correctly")
-    print(f"✅ OCR Engine: {info['engine']}")
-    print(f"✅ Mode: {info['mode']}")
-    print(f"✅ Ready for document processing")
-    
-    print("\n🚀 Phase 3 is READY for Phase 4!")
-    print("\n📋 Available API endpoints:")
-    print("   POST /ocr/process/{document_id}")
-    print("   GET /ocr/results/{document_id}")
-    print("   GET /ocr/engine/info")
-    
+    # Start layout with NO response timeout, but connection timeout
+    response = requests.post(f"http://localhost:8000/layout/analyze/{doc_id}", timeout=(10, None))
+    print(f"   Response: {response.json().get('message', 'Started')}")
+except requests.exceptions.ReadTimeout:
+    print("   ⏳ Layout started (taking time) - this is normal for YOLO")
 except Exception as e:
-    print(f"\n❌ Verification failed: {e}")
-    import traceback
-    traceback.print_exc()
+    print(f"   ❌ Error: {e}")
+
+# Wait longer for YOLO
+print("   Waiting 90 seconds for YOLO processing...")
+time.sleep(90)
+
+print("\n3. Checking Phase 2 status...")
+try:
+    response = requests.get(f"http://localhost:8000/layout/status/{doc_id}", timeout=10)
+    if response.status_code == 200:
+        status = response.json()
+        print(f"   Layout status: {status.get('status', 'unknown')}")
+        if status.get('status') == 'completed':
+            print("   ✅ Phase 2 completed!")
+        else:
+            print(f"   ⏳ Still processing: {status}")
+except Exception as e:
+    print(f"   ❌ Status check failed: {e}")
+
+# Continue with Phase 3 if Phase 2 completed
+print("\n4. Starting Phase 3 (OCR)...")
+try:
+    response = requests.post(f"http://localhost:8000/ocr/process/{doc_id}", timeout=30)
+    print(f"   Response: {response.json().get('message', 'Started')}")
+except Exception as e:
+    print(f"   ❌ OCR failed: {e}")
+
+# Wait for OCR
+print("   Waiting 30 seconds for OCR...")
+time.sleep(30)
+
+print("\n5. Starting Phase 4 (Agents)...")
+try:
+    response = requests.post(f"http://localhost:8000/agents/run/{doc_id}", timeout=30)
+    print(f"   Response: {response.json().get('message', 'Started')}")
+    print(f"   Agents: {response.json().get('agents', [])}")
+except Exception as e:
+    print(f"   ❌ Agents failed: {e}")
+
+# Wait for LLM processing
+print("\n6. Waiting 60 seconds for LLM agents...")
+time.sleep(60)
+
+print("\n7. Checking final results...")
+try:
+    response = requests.get(f"http://localhost:8000/agents/result/{doc_id}", timeout=10)
+    if response.status_code == 200:
+        results = response.json()
+        
+        print(f"   Overall status: {results.get('status', 'unknown')}")
+        print(f"   Agents executed: {results.get('agents_executed', [])}")
+        
+        if results.get('status') == 'completed':
+            # Check Text Agent
+            text_analysis = results.get('text_analysis', {})
+            print(f"\n   Text Agent Results:")
+            print(f"     Document type: {text_analysis.get('document_type', 'unknown')}")
+            
+            key_value_pairs = text_analysis.get('key_value_pairs', {})
+            if key_value_pairs:
+                print(f"     ✅ REAL DATA EXTRACTED:")
+                for key, value in key_value_pairs.items():
+                    print(f"       • {key}: {value}")
+            else:
+                print("     ⚠️ No fields extracted")
+                
+        else:
+            print(f"   ❌ Agents failed: {results.get('error', 'Unknown')}")
+    else:
+        print(f"   ❌ Failed to get results: {response.status_code}")
+        
+except Exception as e:
+    print(f"   ❌ Results check failed: {e}")
+
+print("\n" + "=" * 60)
+print("Test complete! Check server logs for:")
+print("   - YOLO inference messages")
+print("   - 'Text Agent calling LLM'")
+print("   - 'LLM response received'")
