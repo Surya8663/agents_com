@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    // Remove baseUrl and paths since they're deprecated
+    // "baseUrl": ".",  // REMOVE THIS LINE
+    // "paths": {       // REMOVE THIS BLOCK
+    //   "@/*": ["./*"]
+    // },
+    // OR if you need them, add the ignoreDeprecations flag:
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
