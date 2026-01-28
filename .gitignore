@@ -23,3 +23,14 @@ data/
 
 # Environment files
 .env
+
+# Node
+node_modules/
+
+# Python
+venv/
+__pycache__/
+
+# OS
+.DS_Store
+nul
