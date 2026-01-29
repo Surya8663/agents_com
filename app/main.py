@@ -86,6 +86,20 @@ app.add_middleware(
 # Include Phase 1 router (always safe)
 app.include_router(ingest_router)
 
+# Debug endpoint to check what routes are loaded
+@app.get("/debug/routes")
+async def debug_routes():
+    """Debug endpoint to see all registered routes."""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "methods"):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods),
+                "name": route.name
+            })
+    return {"routes": sorted(routes, key=lambda x: x["path"])}
+
 # Health check endpoint
 @app.get("/", include_in_schema=False)
 async def root():
@@ -103,54 +117,60 @@ async def health_check():
             "Phase 1: Document Ingestion",
             "Phase 2: Layout Analysis", 
             "Phase 3: OCR",
-            "Phase 4: Multi-Modal Agents"
+            "Phase 4: Multi-Modal Agents",
+            "Phase 5: RAG & Query"
         ]
     }
 
 # ============================================================================
-# LAZY LOAD PHASE 2, 3 & 4 ROUTERS
+# LAZY LOAD ALL ROUTERS
 # ============================================================================
 @app.on_event("startup")
 async def startup_event():
-    """Initialize Phase 2, 3 and 4 routers on startup."""
+    """Initialize all routers on startup."""
+    print("\n" + "="*60)
+    print("DEBUG: Loading all routers...")
+    print("="*60)
+    
     # Phase 2: Layout Analysis
     try:
         from app.api.layout import router as layout_router
         app.include_router(layout_router, prefix="/layout", tags=["layout"])
         print("✅ Phase 2 (Layout Analysis) router loaded")
+        print(f"   Routes: {len(layout_router.routes)}")
     except Exception as e:
         print(f"⚠️  Phase 2 router failed: {e}")
-        @app.get("/layout/fallback")
-        async def layout_fallback():
-            return {"error": "Layout analysis temporarily unavailable"}
     
     # Phase 3: OCR
     try:
         from app.api.ocr import router as ocr_router
         app.include_router(ocr_router)  # No prefix needed
         print("✅ Phase 3 (OCR) router loaded")
+        print(f"   Routes: {len(ocr_router.routes)}")
     except Exception as e:
         print(f"⚠️  Phase 3 router failed: {e}")
-        @app.get("/ocr/fallback")
-        async def ocr_fallback():
-            return {"error": "OCR temporarily unavailable"}
     
     # Phase 4: Multi-Modal Agents
     try:
         from app.api.agents import router as agents_router
         app.include_router(agents_router)  # Already has /agents prefix
         print("✅ Phase 4 (Multi-Modal Agents) router loaded")
-        print("   - Vision Agent: Layout intelligence")
-        print("   - Text Agent: Semantic extraction")
-        print("   - Fusion Agent: Multi-modal alignment")
-        print("   - Validation Agent: Confidence scoring")
-        print("   - LLM: Qwen-2.5-Instruct (open-source)")
-        print("   - Vector DB: Qdrant for RAG")
+        print(f"   Routes: {len(agents_router.routes)}")
     except Exception as e:
         print(f"⚠️  Phase 4 router failed: {e}")
-        @app.get("/agents/fallback")
-        async def agents_fallback():
-            return {"error": "Agent intelligence temporarily unavailable"}
+    
+    # Phase 5: RAG & Query
+    try:
+        from app.api.rag_query import router as rag_router
+        app.include_router(rag_router)  # Already has /rag prefix
+        print("✅ Phase 5 (RAG & Query) router loaded")
+        print(f"   Routes: {len(rag_router.routes)}")
+    except Exception as e:
+        print(f"⚠️  Phase 5 (RAG) router failed: {e}")
+    
+    print("="*60)
+    print("All routers loaded")
+    print("="*60 + "\n")
 
 # ============================================================================
 # INFORMATION ENDPOINTS
@@ -172,7 +192,7 @@ async def service_info():
             }
         ],
         "data_directory": str(settings.BASE_DATA_DIR.absolute()),
-        "current_phase": 4
+        "current_phase": 5
     }
     
     # Dynamically add available phases
@@ -226,6 +246,23 @@ async def service_info():
     except:
         pass
     
+    try:
+        from app.api.rag_query import router as rag_router
+        info["phases"].append({
+            "phase": 5,
+            "name": "RAG & Multi-Modal Query",
+            "description": "Retrieval-Augmented Generation with multi-modal document understanding",
+            "endpoints": [
+                "POST /rag/query",
+                "POST /rag/query/simple",
+                "POST /rag/index/{document_id}",
+                "GET /rag/index/status/{document_id}",
+                "GET /rag/stats"
+            ]
+        })
+    except:
+        pass
+    
     return info
 
 @app.get("/endpoints")
@@ -250,50 +287,33 @@ if __name__ == "__main__":
     print(f"Version: {settings.API_VERSION}")
     print(f"Data directory: {settings.BASE_DATA_DIR.absolute()}")
     
-    if hasattr(settings, 'POPPLER_PATH') and settings.POPPLER_PATH:
-        print(f"Poppler path: {settings.POPPLER_PATH}")
-    
     print("\nAvailable endpoints:")
-    print("- Phase 1:")
+    print("- Phase 1 (Document Ingestion):")
     print("  POST /ingest/upload        - Upload and process PDF")
     print("  GET  /ingest/status/{id}   - Check processing status")
     
-    # Check Phase 2 availability
-    try:
-        from app.api.layout import router as layout_router
-        print("- Phase 2:")
-        print("  POST /layout/analyze/{id}  - Start layout analysis")
-        print("  GET  /layout/status/{id}   - Check layout status")
-        print("  GET  /layout/results/{id}  - Get layout results")
-        print("  GET  /layout/model/info    - Get YOLO model info")
-    except:
-        print("- Phase 2: Not available (import error)")
+    print("- Phase 2 (Layout Analysis):")
+    print("  POST /layout/analyze/{id}  - Start layout analysis")
+    print("  GET  /layout/status/{id}   - Check layout status")
+    print("  GET  /layout/results/{id}  - Get layout results")
     
-    # Check Phase 3 availability
-    try:
-        from app.api.ocr import router as ocr_router
-        print("- Phase 3:")
-        print("  POST /ocr/process/{id}     - Start OCR processing")
-        print("  GET  /ocr/status/{id}      - Check OCR status")
-        print("  GET  /ocr/results/{id}     - Get OCR results")
-        print("  GET  /ocr/engine/info      - Get OCR engine info")
-    except:
-        print("- Phase 3: Not available (import error)")
+    print("- Phase 3 (OCR):")
+    print("  POST /ocr/process/{id}     - Start OCR processing")
+    print("  GET  /ocr/status/{id}      - Check OCR status")
+    print("  GET  /ocr/results/{id}     - Get OCR results")
     
-    # Check Phase 4 availability
-    try:
-        from app.api.agents import router as agents_router
-        print("- Phase 4:")
-        print("  POST /agents/run/{id}      - Start multi-agent reasoning")
-        print("  GET  /agents/status/{id}   - Check agent pipeline status")
-        print("  GET  /agents/result/{id}   - Get structured understanding")
-        print("  POST /agents/query         - Multi-modal RAG query")
-        print("  GET  /agents/vector/info   - Vector DB information")
-        print("  GET  /agents/llm/info      - LLM configuration")
-    except:
-        print("- Phase 4: Not available (import error)")
+    print("- Phase 4 (Multi-Modal Agents):")
+    print("  POST /agents/run/{id}      - Start multi-agent reasoning")
+    print("  GET  /agents/status/{id}   - Check agent pipeline status")
+    print("  GET  /agents/result/{id}   - Get structured understanding")
+    print("  POST /agents/query         - Multi-modal RAG query")
     
-    print("- System:")
+    print("- Phase 5 (RAG & Query):")
+    print("  POST /rag/query            - Multi-modal RAG query")
+    print("  POST /rag/index/{id}       - Index document for RAG")
+    print("  GET  /rag/stats            - Get RAG system stats")
+    
+    print("\nSystem endpoints:")
     print("  GET  /health               - Health check")
     print("  GET  /info                 - Service info")
     print("  GET  /endpoints            - List all endpoints")

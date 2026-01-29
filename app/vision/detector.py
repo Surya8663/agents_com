@@ -1,4 +1,4 @@
-# app/vision/detector.py - UPDATED VERSION
+# app/vision/detector.py - CORRECT VERSION (no changes needed)
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple

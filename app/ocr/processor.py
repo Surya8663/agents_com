@@ -22,21 +22,31 @@ class OCRProcessor:
     def __init__(self, lang: str = "en", use_gpu: bool = False):
         self.lang = lang
         self.use_gpu = use_gpu
-        self.ocr_manager = OCRManager(lang, use_gpu)
-        self.region_cropper = RegionCropper()
         
-        if self.ocr_manager.mode != "real":
-            logger.error("❌ OCR is in FALLBACK mode - NOT REAL OCR!")
-            raise RuntimeError("EasyOCR failed to initialize. REAL OCR required.")
-        
-        logger.info(f"✅ REAL EasyOCR Processor initialized (lang={lang}, GPU={use_gpu})")
+        try:
+            logger.info(f"🔄 Initializing OCRProcessor (lang={lang}, GPU={use_gpu})")
+            self.ocr_manager = OCRManager(lang, use_gpu)
+            self.region_cropper = RegionCropper()
+            
+            if self.ocr_manager.mode != "real":
+                logger.error("❌ OCR is in FALLBACK mode - NOT REAL OCR!")
+                raise RuntimeError("EasyOCR failed to initialize. REAL OCR required.")
+            
+            logger.info(f"✅ REAL EasyOCR Processor initialized (lang={lang}, GPU={use_gpu})")
+        except Exception as e:
+            logger.error(f"❌ OCRProcessor initialization failed: {e}")
+            raise RuntimeError(f"OCR processor initialization failed: {str(e)}")
     
     def _validate_real_text(self, text: Optional[str]) -> bool:
         """Validate that text is REAL, not mock data."""
         if not text:
             return False
         
-        # Common mock phrases from your old fallback
+        text_str = str(text).strip()
+        if len(text_str) == 0:
+            return False
+        
+        # Common mock phrases to reject
         mock_phrases = [
             "INVOICE #INV-", 
             "PURCHASE ORDER",
@@ -50,7 +60,7 @@ class OCRProcessor:
         
         # Check if text contains mock patterns
         for phrase in mock_phrases:
-            if phrase in text:
+            if phrase in text_str:
                 logger.warning(f"⚠️ Mock data detected: '{phrase}'")
                 return False
         
@@ -65,6 +75,8 @@ class OCRProcessor:
             page_width = page_data.get("page_width", 0)
             page_height = page_data.get("page_height", 0)
             detections = page_data.get("detections", [])
+            
+            logger.info(f"Processing page {page_number} with {len(detections)} detections")
             
             if not image_path:
                 logger.error(f"No image path for page {page_number}")
@@ -87,6 +99,8 @@ class OCRProcessor:
                 logger.warning(f"No regions cropped for page {page_number}")
                 cropped_regions = []
             
+            logger.info(f"Cropped {len(cropped_regions)} regions for page {page_number}")
+            
             # Process with REAL OCR
             ocr_results = self.ocr_manager.process_regions(cropped_regions)
             
@@ -94,10 +108,15 @@ class OCRProcessor:
             region_results = []
             real_ocr_count = 0
             empty_ocr_count = 0
+            skipped_count = 0
             confidences = []
             
-            for result in ocr_results:
-                detection = result["detection"]
+            for i, result in enumerate(ocr_results):
+                # Get detection - handle both formats
+                detection = result.get("detection", {})
+                if not detection and i < len(detections):
+                    detection = detections[i]
+                
                 detection_type = detection.get("type", "text_block")
                 bbox_dict = detection.get("bbox", {})
                 
@@ -113,17 +132,36 @@ class OCRProcessor:
                 ocr_text = result.get("ocr_text", "")
                 ocr_confidence = result.get("ocr_confidence", 0.0)
                 
+                # Check if skipped
+                if result.get("ocr_skipped", False):
+                    skipped_reason = result.get("skip_reason", f"Skipped {detection_type}")
+                    region_result = OCRRegionResult(
+                        region_id=result.get("region_id", f"p{page_number}_r{i}"),
+                        type=detection_type,
+                        bbox=ocr_bbox,
+                        ocr_text="",
+                        ocr_confidence=0.0,
+                        engine="easyocr_real",
+                        language=self.lang,
+                        word_boxes=[],
+                        ocr_processed=False,
+                        ocr_skipped_reason=skipped_reason
+                    )
+                    skipped_count += 1
+                    region_results.append(region_result)
+                    continue
+                
                 # Validate it's REAL text
                 is_real_text = self._validate_real_text(ocr_text) and len(str(ocr_text).strip()) > 0
                 
                 # Create region result
                 region_result = OCRRegionResult(
-                    region_id=result["region_id"],
+                    region_id=result.get("region_id", f"p{page_number}_r{i}"),
                     type=detection_type,
                     bbox=ocr_bbox,
                     ocr_text=ocr_text if is_real_text else "",
                     ocr_confidence=ocr_confidence if is_real_text else 0.0,
-                    engine="easyocr_real",  # CHANGED from paddleocr_real
+                    engine="easyocr_real",
                     language=self.lang,
                     word_boxes=result.get("word_boxes", []),
                     ocr_processed=is_real_text,
@@ -155,14 +193,14 @@ class OCRProcessor:
                 regions=region_results,
                 total_regions=len(region_results),
                 ocr_regions=real_ocr_count,
-                skipped_regions=empty_ocr_count,
+                skipped_regions=skipped_count,
                 average_confidence=avg_confidence
             )
             
             # Save result
             self._save_page_result(document_id, page_result)
             
-            logger.info(f"✅ Page {page_number} (REAL EasyOCR): {real_ocr_count} real text, {empty_ocr_count} empty")
+            logger.info(f"✅ Page {page_number} (REAL EasyOCR): {real_ocr_count} real text, {empty_ocr_count} empty, {skipped_count} skipped")
             return page_result
             
         except Exception as e:
@@ -194,7 +232,7 @@ class OCRProcessor:
             return {
                 "status": "not_started",
                 "document_id": str(document_id),
-                "engine": "easyocr_real",  # CHANGED from paddleocr_real
+                "engine": "easyocr_real",
                 "real_ocr": True,
                 "note": "Waiting for REAL OCR processing"
             }
@@ -204,12 +242,14 @@ class OCRProcessor:
         if ocr_files:
             # Check if results contain real text
             real_pages = 0
+            total_regions = 0
             for ocr_file in ocr_files:
                 try:
                     with open(ocr_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         if data.get("ocr_regions", 0) > 0:
                             real_pages += 1
+                        total_regions += data.get("total_regions", 0)
                 except:
                     pass
             
@@ -218,13 +258,14 @@ class OCRProcessor:
                 "document_id": str(document_id),
                 "pages_processed": len(ocr_files),
                 "pages_with_real_text": real_pages,
-                "engine": "easyocr_real",  # CHANGED from paddleocr_real
+                "total_regions": total_regions,
+                "engine": "easyocr_real",
                 "real_ocr": True
             }
         
         return {
             "status": "processing",
             "document_id": str(document_id),
-            "engine": "easyocr_real",  # CHANGED from paddleocr_real
+            "engine": "easyocr_real",
             "real_ocr": True
         }

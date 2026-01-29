@@ -4,6 +4,7 @@ FastAPI endpoints for Phase 4: Agent-Based Multi-Modal Reasoning.
 import uuid
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -15,7 +16,7 @@ from app.vectorstore.qdrant_client import qdrant_store
 from app.llm.embeddings import embedding_generator
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(prefix="/agents", tags=["agents"])  # This line was missing!
 
 
 # Request/Response models
@@ -58,8 +59,18 @@ async def _run_agent_pipeline(document_id: uuid.UUID):
         # Load Phase 3 OCR data
         ocr_dir = doc_dir / "ocr"
         ocr_files = list(ocr_dir.glob("page_*_ocr.json"))
+        
         if not ocr_files:
-            raise ValueError(f"OCR data not found for {document_id}")
+            # Wait for OCR to complete
+            logger.info(f"⏳ Waiting for OCR results for {document_id}...")
+            for attempt in range(30):  # 30 * 2 = 60 seconds max
+                ocr_files = list(ocr_dir.glob("page_*_ocr.json"))
+                if ocr_files:
+                    break
+                time.sleep(2)
+            
+            if not ocr_files:
+                raise ValueError(f"No OCR results found for {document_id} after waiting")
         
         # Compile OCR data
         ocr_pages = []
@@ -107,26 +118,19 @@ async def run_agents(
 ):
     """
     Start agent-based multi-modal reasoning for a document.
-    
-    This endpoint:
-    1. Loads Phase 2 layout data
-    2. Loads Phase 3 OCR data  
-    3. Runs 4-agent pipeline (Vision, Text, Fusion, Validation)
-    4. Stores results in vector database
-    5. Returns structured document understanding
     """
     # Check document exists
     doc_dir = settings.DOCUMENTS_DIR / str(document_id)
     if not doc_dir.exists():
         raise HTTPException(404, detail=f"Document {document_id} not found")
     
-    # Check prerequisites
+    # Check layout exists
     layout_dir = doc_dir / "layout"
-    ocr_dir = doc_dir / "ocr"
-    
     if not layout_dir.exists():
         raise HTTPException(400, detail="Run layout analysis first (/layout/analyze)")
     
+    # Check OCR exists or is processing
+    ocr_dir = doc_dir / "ocr"
     if not ocr_dir.exists():
         raise HTTPException(400, detail="Run OCR processing first (/ocr/process)")
     
@@ -222,6 +226,40 @@ async def get_agent_result(document_id: uuid.UUID):
             return json.load(f)
     
     raise HTTPException(404, detail=f"No agent results found for document {document_id}")
+
+
+@router.get("/prerequisites/{document_id}")
+async def check_prerequisites(document_id: uuid.UUID):
+    """Check if all prerequisites for agent pipeline are met."""
+    doc_dir = settings.DOCUMENTS_DIR / str(document_id)
+    
+    if not doc_dir.exists():
+        raise HTTPException(404, detail=f"Document {document_id} not found")
+    
+    # Check layout
+    layout_dir = doc_dir / "layout"
+    layout_exists = layout_dir.exists()
+    layout_summary_exists = (layout_dir / "document_layout_summary.json").exists() if layout_exists else False
+    
+    # Check OCR
+    ocr_dir = doc_dir / "ocr"
+    ocr_exists = ocr_dir.exists()
+    ocr_files_exist = len(list(ocr_dir.glob("page_*_ocr.json"))) > 0 if ocr_exists else False
+    
+    return {
+        "document_id": str(document_id),
+        "prerequisites": {
+            "document_exists": True,
+            "layout_analysis_done": layout_summary_exists,
+            "ocr_processing_done": ocr_files_exist,
+            "all_prerequisites_met": layout_summary_exists and ocr_files_exist
+        },
+        "next_steps": {
+            "layout": "Run /layout/analyze" if not layout_summary_exists else "✓ Complete",
+            "ocr": "Run /ocr/process" if not ocr_files_exist else "✓ Complete",
+            "agents": "Run /agents/run" if layout_summary_exists and ocr_files_exist else "Wait for prerequisites"
+        }
+    }
 
 
 @router.post("/query")

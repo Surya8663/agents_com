@@ -1,4 +1,4 @@
-# app/vision/model_loader.py - REAL MODEL ONLY
+# app/vision/model_loader.py - REAL MODEL ONLY - FIXED VERSION
 import os
 from pathlib import Path
 from typing import Optional
@@ -105,59 +105,58 @@ class ModelLoader:
         """Check if REAL model is loaded."""
         return self.loaded and self.model is not None
     
-    # Add to app/vision/model_loader.py in the ModelLoader class
-def map_class_id_to_type(self, class_id: int, class_name: str = "") -> str:
-    """
-    Map YOLO COCO class IDs to document element types.
-    
-    YOLOv8n is trained on COCO (80 classes of objects).
-    We need to map these to document layout elements.
-    
-    Args:
-        class_id: YOLO class ID (0-79 for COCO)
-        class_name: Optional class name from model
+    def map_class_id_to_type(self, class_id: int, class_name: str = "") -> str:
+        """
+        Map YOLO COCO class IDs to document element types.
         
-    Returns:
-        Document element type
-    """
-    # YOLOv8 COCO classes mapping to document elements
-    # This is a simple mapping - for real document layout detection,
-    # you need a model trained on document layout data
-    
-    if class_name:
-        class_name_lower = class_name.lower()
+        YOLOv8n is trained on COCO (80 classes of objects).
+        We need to map these to document layout elements.
         
-        # Map based on class names
-        text_indicators = ['book', 'laptop', 'cell phone', 'tv', 'remote']
-        table_indicators = ['dining table', 'bench']
-        figure_indicators = ['picture', 'vase', 'clock']
-        signature_indicators = ['person']
+        Args:
+            class_id: YOLO class ID (0-79 for COCO)
+            class_name: Optional class name from model
+            
+        Returns:
+            Document element type
+        """
+        # YOLOv8 COCO classes mapping to document elements
+        # This is a simple mapping - for real document layout detection,
+        # you need a model trained on document layout data
         
-        for indicator in text_indicators:
-            if indicator in class_name_lower:
-                return "text_block"
+        if class_name:
+            class_name_lower = class_name.lower()
+            
+            # Map based on class names
+            text_indicators = ['book', 'laptop', 'cell phone', 'tv', 'remote']
+            table_indicators = ['dining table', 'bench']
+            figure_indicators = ['picture', 'vase', 'clock']
+            signature_indicators = ['person']
+            
+            for indicator in text_indicators:
+                if indicator in class_name_lower:
+                    return "text_block"
+            
+            for indicator in table_indicators:
+                if indicator in class_name_lower:
+                    return "table"
+            
+            for indicator in figure_indicators:
+                if indicator in class_name_lower:
+                    return "figure"
+            
+            for indicator in signature_indicators:
+                if indicator in class_name_lower:
+                    return "signature"
         
-        for indicator in table_indicators:
-            if indicator in class_name_lower:
-                return "table"
+        # Default mapping by class ID ranges
+        if 0 <= class_id <= 20:    # Person, vehicle, animal categories
+            return "signature" if class_id == 0 else "figure"
+        elif 21 <= class_id <= 40:  # Food, furniture
+            return "table" if class_id in [60, 61] else "figure"  # dining table, bed
+        elif 41 <= class_id <= 60:  # Electronic, kitchen items
+            return "text_block" if class_id in [63, 67, 73] else "figure"  # laptop, cell phone, book
+        else:                       # Miscellaneous
+            return "figure"
         
-        for indicator in figure_indicators:
-            if indicator in class_name_lower:
-                return "figure"
-        
-        for indicator in signature_indicators:
-            if indicator in class_name_lower:
-                return "signature"
-    
-    # Default mapping by class ID ranges
-    if 0 <= class_id <= 20:    # Person, vehicle, animal categories
-        return "signature" if class_id == 0 else "figure"
-    elif 21 <= class_id <= 40:  # Food, furniture
-        return "table" if class_id in [60, 61] else "figure"  # dining table, bed
-    elif 41 <= class_id <= 60:  # Electronic, kitchen items
-        return "text_block" if class_id in [63, 67, 73] else "figure"  # laptop, cell phone, book
-    else:                       # Miscellaneous
-        return "figure"
-    
-    # Default fallback
-    return "text_block"
+        # Default fallback
+        return "text_block"

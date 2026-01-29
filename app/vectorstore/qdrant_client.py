@@ -1,6 +1,6 @@
-# app/vectorstore/qdrant_client.py - EXTENDED FOR MULTI-MODAL
+# app/vectorstore/qdrant_client.py - EXTENDED FOR MULTI-MODAL - FIXED VERSION
 """
-Qdrant client for multi-modal RAG - EXTENDED VERSION.
+Qdrant client for multi-modal RAG - EXTENDED VERSION with SAFE INITIALIZATION.
 """
 import os
 import logging
@@ -15,22 +15,26 @@ class QdrantStore:
     """Qdrant vector database for document embeddings - EXTENDED for multi-modal."""
     
     def __init__(self, collection_name: str = "document_chunks"):
-        """Initialize Qdrant client with multi-modal support."""
+        """Initialize Qdrant client with multi-modal support - SAFE VERSION."""
         self.collection_name = collection_name
         self.client = None
-        self.use_fallback = False
+        self.use_fallback = True  # Start with fallback by default
         self.multi_modal_collections = {
             "text": f"{collection_name}_text",
             "vision": f"{collection_name}_vision",
             "multimodal": f"{collection_name}_multimodal"
         }
         
-        # Try to connect to Qdrant
-        self._initialize_client()
+        # Initialize fallback storage
+        self.fallback_storage = {}
+        
+        # Try to connect to Qdrant, but don't crash if it fails
+        self._initialize_client_safe()
     
-    def _initialize_client(self):
-        """Initialize Qdrant client with multi-modal collections."""
+    def _initialize_client_safe(self):
+        """Initialize Qdrant client safely - don't crash on failure."""
         try:
+            # Try to import Qdrant
             from qdrant_client import QdrantClient
             from qdrant_client.http import models
             
@@ -38,24 +42,35 @@ class QdrantStore:
             host = os.getenv("QDRANT_HOST", "localhost")
             port = int(os.getenv("QDRANT_PORT", "6333"))
             
-            logger.info(f"Attempting to connect to Qdrant at {host}:{port}")
+            logger.info(f"🔄 Attempting to connect to Qdrant at {host}:{port}")
             self.client = QdrantClient(host=host, port=port)
             
             # Test connection
             collections = self.client.get_collections()
-            logger.info(f"✅ Qdrant connected. Collections: {len(collections.collections)}")
+            logger.info(f"✅ Qdrant connected. Found {len(collections.collections)} collections")
             
-            # Ensure multi-modal collections exist
-            self._ensure_multi_modal_collections()
+            # Mark as not using fallback
+            self.use_fallback = False
+            
+            # Try to create collections, but don't fail if it doesn't work
+            try:
+                self._ensure_multi_modal_collections()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not create collections: {e}")
+                logger.info("   Using existing collections only")
+            
+        except ImportError as e:
+            logger.warning(f"⚠️ Qdrant client not installed: {e}")
+            logger.info("   Using in-memory fallback storage")
+            logger.info("   Install: pip install qdrant-client")
             
         except Exception as e:
             logger.warning(f"⚠️ Failed to connect to Qdrant: {e}")
             logger.info("   Using in-memory fallback storage")
-            self.use_fallback = True
-            self._initialize_fallback()
+            logger.info("   Make sure Qdrant is running: docker run -p 6333:6333 qdrant/qdrant")
     
     def _ensure_multi_modal_collections(self):
-        """Ensure multi-modal collections exist."""
+        """Ensure multi-modal collections exist - SAFE VERSION."""
         if self.use_fallback or not self.client:
             return
         
@@ -85,8 +100,8 @@ class QdrantStore:
                     logger.info(f"Created multi-modal collection: {collection_name} (dim={vector_size})")
                     
         except Exception as e:
-            logger.error(f"Failed to create multi-modal collections: {e}")
-            self.use_fallback = True
+            logger.warning(f"Failed to create multi-modal collections: {e}")
+            # Don't switch to fallback, just use existing collections
     
     def store_multi_modal_chunk(self, chunk: Dict[str, Any]) -> bool:
         """Store a multi-modal chunk in appropriate collection."""
@@ -149,7 +164,8 @@ class QdrantStore:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to store multi-modal chunk: {e}")
+            logger.error(f"Failed to store multi-modal chunk in Qdrant: {e}")
+            logger.info("Falling back to in-memory storage")
             return self._fallback_store_chunk(chunk)
     
     def search_multi_modal(self, query_embedding: List[float], modality: str = "multimodal",
@@ -215,7 +231,13 @@ class QdrantStore:
             
         except Exception as e:
             logger.error(f"Multi-modal search failed: {e}")
+            logger.info("Falling back to in-memory search")
             return self._fallback_search(query_embedding, document_id, limit)
+    
+    def search_similar(self, query_embedding: List[float], document_id: Optional[str] = None, 
+                      limit: int = 10) -> List[Dict[str, Any]]:
+        """Simplified search interface for agents.py compatibility."""
+        return self.search_multi_modal(query_embedding, "text", document_id, limit)
     
     def _get_modality_from_collection(self, collection_name: str) -> str:
         """Extract modality from collection name."""
@@ -300,6 +322,27 @@ class QdrantStore:
         # Sort by score
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
+    
+    def get_collection_info(self):
+        """Get information about collections."""
+        if self.use_fallback or not self.client:
+            return {
+                "status": "using_fallback",
+                "stored_chunks": sum(len(chunks) for chunks in self.fallback_storage.values())
+            }
+        
+        try:
+            collections = self.client.get_collections()
+            return {
+                "status": "connected",
+                "collections": [c.name for c in collections.collections],
+                "multi_modal_collections": self.multi_modal_collections
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
 
 # Global instance

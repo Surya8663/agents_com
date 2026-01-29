@@ -18,37 +18,82 @@ class OCRManager:
         self.engine_name = "EasyOCR"
         self.mode = "real"
         
-        # Initialize REAL EasyOCR
-        self.easy_reader = self._init_easyocr()
+        # Initialize REAL EasyOCR with timeout
+        self.easy_reader = self._init_easyocr_with_timeout()
         
         logger.info(f"✅ REAL EasyOCR initialized (lang={lang}, GPU={use_gpu})")
     
-    def _init_easyocr(self):
-        """Initialize REAL EasyOCR."""
-        try:
-            import warnings
-            warnings.filterwarnings("ignore")
-            
-            import easyocr
-            
-            logger.info("🔄 Initializing REAL EasyOCR...")
-            
-            reader = easyocr.Reader(
-                [self.lang], 
-                gpu=self.use_gpu,
-                verbose=False
-            )
-            
-            logger.info("✅ EasyOCR initialization successful")
-            return reader
+    def _init_easyocr_with_timeout(self):
+        """Initialize REAL EasyOCR with timeout to prevent hanging."""
+        import threading
+        import queue
+        import warnings
+        warnings.filterwarnings("ignore")
+        
+        result_queue = queue.Queue()
+        error_queue = queue.Queue()
+        
+        def init_reader():
+            try:
+                import easyocr
+                logger.info(f"🔄 Initializing EasyOCR (GPU={self.use_gpu}, lang={self.lang})...")
                 
-        except Exception as e:
-            logger.error(f"❌ REAL EasyOCR FAILED: {e}")
-            raise RuntimeError(f"REAL OCR initialization failed: {str(e)}")
+                # Force CPU if GPU fails
+                actual_use_gpu = self.use_gpu
+                try:
+                    reader = easyocr.Reader(
+                        [self.lang], 
+                        gpu=actual_use_gpu,
+                        verbose=False,
+                        download_enabled=True,
+                        model_storage_directory='./easyocr_models'
+                    )
+                    result_queue.put(reader)
+                    logger.info(f"✅ EasyOCR initialized with GPU={actual_use_gpu}")
+                except Exception as gpu_error:
+                    logger.warning(f"GPU initialization failed, trying CPU: {gpu_error}")
+                    # Try with CPU
+                    reader = easyocr.Reader(
+                        [self.lang], 
+                        gpu=False,
+                        verbose=False,
+                        download_enabled=True,
+                        model_storage_directory='./easyocr_models'
+                    )
+                    result_queue.put(reader)
+                    logger.info("✅ EasyOCR initialized with CPU fallback")
+                    
+            except Exception as e:
+                logger.error(f"EasyOCR initialization error: {e}")
+                error_queue.put(e)
+        
+        # Start initialization in a thread
+        init_thread = threading.Thread(target=init_reader)
+        init_thread.daemon = True
+        init_thread.start()
+        
+        # Wait for initialization with timeout
+        init_thread.join(timeout=60)  # 60 second timeout
+        
+        if init_thread.is_alive():
+            logger.error("❌ EasyOCR initialization timeout (60 seconds)")
+            raise RuntimeError("EasyOCR initialization timeout. Check internet connection and model downloads.")
+        
+        if not error_queue.empty():
+            error = error_queue.get()
+            logger.error(f"❌ EasyOCR initialization failed: {error}")
+            raise RuntimeError(f"EasyOCR initialization failed: {str(error)}")
+        
+        if result_queue.empty():
+            logger.error("❌ EasyOCR initialization produced no result")
+            raise RuntimeError("EasyOCR initialization produced no result")
+        
+        return result_queue.get()
     
     def extract_text(self, image: np.ndarray, region_id: str = "unknown") -> Tuple[str, float, List[Dict]]:
         """Extract REAL text from image."""
         if image is None or image.size == 0:
+            logger.warning(f"Empty image for region {region_id}")
             return "", 0.0, []
         
         try:
@@ -56,9 +101,13 @@ class OCRManager:
             if len(image.shape) == 2:
                 import cv2
                 image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            elif len(image.shape) == 3 and image.shape[2] == 4:
+                # RGBA to RGB
+                import cv2
+                image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
             
             # Run REAL OCR
-            results = self.easy_reader.readtext(image)
+            results = self.easy_reader.readtext(image, detail=1)
             
             texts = []
             confidences = []
@@ -78,23 +127,28 @@ class OCRManager:
             if texts:
                 full_text = " ".join(texts)
                 avg_confidence = float(np.mean(confidences)) if confidences else 0.0
-                logger.debug(f"Extracted {len(texts)} words from {region_id}")
+                logger.debug(f"Extracted {len(texts)} words from {region_id}: '{full_text[:50]}...'")
                 return full_text, avg_confidence, word_boxes
             else:
+                logger.debug(f"No text found in region {region_id}")
                 return "", 0.0, []
                 
         except Exception as e:
-            logger.error(f"OCR extraction failed: {e}")
+            logger.error(f"OCR extraction failed for {region_id}: {e}")
             return "", 0.0, []
     
     def process_regions(self, regions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Process regions with REAL OCR."""
         processed = []
         
+        logger.info(f"Processing {len(regions)} regions with OCR...")
+        
         for i, region in enumerate(regions):
-            region_id = region.get("region_id", f"region_{i}")
+            region_id = region.get("region_id", f"region_{i+1}")
             region_type = region.get("detection", {}).get("type", "text_block")
             image = region.get("region_image")
+            
+            logger.debug(f"Processing region {region_id} ({region_type})")
             
             if region_type in ["figure", "signature"]:
                 region.update({
@@ -108,7 +162,7 @@ class OCRManager:
                 processed.append(region)
                 continue
             
-            if image is not None:
+            if image is not None and image.size > 0:
                 text, confidence, word_boxes = self.extract_text(image, region_id)
                 region.update({
                     "ocr_text": text,
@@ -118,7 +172,13 @@ class OCRManager:
                     "error": None,
                     "ocr_skipped": False
                 })
+                
+                if text:
+                    logger.debug(f"Region {region_id}: Extracted {len(text)} chars, confidence {confidence:.2f}")
+                else:
+                    logger.debug(f"Region {region_id}: No text extracted")
             else:
+                logger.warning(f"Region {region_id}: No image available")
                 region.update({
                     "ocr_text": "",
                     "ocr_confidence": 0.0,
@@ -129,6 +189,11 @@ class OCRManager:
                 })
             
             processed.append(region)
+        
+        # Count statistics
+        text_regions = sum(1 for r in processed if r.get("ocr_processed"))
+        skipped_regions = sum(1 for r in processed if r.get("ocr_skipped"))
+        logger.info(f"OCR processed: {text_regions} with text, {skipped_regions} skipped, {len(processed) - text_regions - skipped_regions} empty")
         
         return processed
     

@@ -2,11 +2,12 @@
 Multi-modal RAG data schemas.
 """
 from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field
+from enum import Enum
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 
-class Modality(str):
+class Modality(str, Enum):
     """Modality types."""
     TEXT = "text"
     VISION = "vision"
@@ -15,6 +16,8 @@ class Modality(str):
 
 class BoundingBox(BaseModel):
     """Normalized bounding box."""
+    model_config = ConfigDict(extra='forbid')
+    
     x1: float = Field(..., ge=0, le=1, description="Top-left x (normalized)")
     y1: float = Field(..., ge=0, le=1, description="Top-left y (normalized)")
     x2: float = Field(..., ge=0, le=1, description="Bottom-right x (normalized)")
@@ -27,6 +30,8 @@ class BoundingBox(BaseModel):
 
 class RAGChunk(BaseModel):
     """Base RAG chunk with multi-modal support."""
+    model_config = ConfigDict(extra='allow')
+    
     id: str = Field(..., description="Unique chunk ID")
     document_id: str = Field(..., description="Document identifier")
     page_number: int = Field(..., description="Page number (1-indexed)")
@@ -39,7 +44,7 @@ class RAGChunk(BaseModel):
     bbox: Optional[BoundingBox] = Field(None, description="Bounding box on page")
     region_type: Optional[str] = Field(None, description="Region type (text_block, table, etc.)")
     
-    # Modality
+    # Modality - use the Enum type directly
     modality: Modality = Field(..., description="Content modality")
     
     # Source tracking
@@ -53,85 +58,36 @@ class RAGChunk(BaseModel):
     # Metadata
     timestamp: datetime = Field(default_factory=datetime.now)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "id": "chunk_001",
-                "document_id": "doc_123",
-                "page_number": 1,
-                "text": "Invoice number: INV-2023-001",
-                "visual_description": "Blue header with company logo on right",
-                "bbox": {"x1": 0.1, "y1": 0.05, "x2": 0.9, "y2": 0.15},
-                "region_type": "header",
-                "modality": "multimodal",
-                "agent_source": "fusion_agent",
-                "confidence": 0.92,
-                "text_embedding": [0.1, 0.2, ...],
-                "visual_embedding": [0.3, 0.4, ...],
-                "metadata": {"font_size": 14, "color": "blue"}
-            }
-        }
 
 
 class RAGQuery(BaseModel):
     """RAG query with multi-modal support."""
+    model_config = ConfigDict(extra='forbid')
+    
     query: str = Field(..., description="Natural language query")
     modality: Optional[Modality] = Field(None, description="Preferred modality")
     document_id: Optional[str] = Field(None, description="Filter by document")
     page_number: Optional[int] = Field(None, description="Filter by page")
     top_k: int = Field(10, ge=1, le=100, description="Number of results")
     similarity_threshold: float = Field(0.7, ge=0, le=1, description="Minimum similarity")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "query": "What is the invoice total amount?",
-                "modality": "multimodal",
-                "document_id": "doc_123",
-                "top_k": 5,
-                "similarity_threshold": 0.8
-            }
-        }
 
 
 class RAGResult(BaseModel):
     """RAG retrieval result."""
+    model_config = ConfigDict(extra='forbid')
+    
     chunk: RAGChunk
     similarity_score: float = Field(..., ge=0, le=1, description="Similarity score")
     relevance_score: float = Field(..., ge=0, le=1, description="Relevance score")
     evidence_type: str = Field(..., description="Type of evidence")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "chunk": {...},
-                "similarity_score": 0.89,
-                "relevance_score": 0.92,
-                "evidence_type": "text_and_visual"
-            }
-        }
 
 
 class RAGResponse(BaseModel):
     """Complete RAG response."""
+    model_config = ConfigDict(extra='forbid')
+    
     query: str
     results: List[RAGResult] = Field(default_factory=list)
     answer: Optional[str] = Field(None, description="Generated answer")
     confidence: float = Field(..., ge=0, le=1, description="Overall confidence")
     traceability: Dict[str, Any] = Field(default_factory=dict)
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "query": "What is the invoice total amount?",
-                "results": [...],
-                "answer": "The invoice total amount is $1,250.00",
-                "confidence": 0.88,
-                "traceability": {
-                    "sources_used": 3,
-                    "pages_referenced": [1, 2],
-                    "modalities": ["text", "vision"]
-                }
-            }
-        }
