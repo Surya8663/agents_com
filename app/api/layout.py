@@ -1,21 +1,23 @@
-# app/api/layout.py - COMPLETE FIXED VERSION
+"""
+Layout Analysis API - Phase 2
+Complete implementation with proper routing
+"""
 import json
 import logging
 import uuid
 from pathlib import Path
 from typing import List, Optional
-import traceback  # ADDED
+import traceback
 
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
-from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
 from app.vision.model_loader import ModelLoader
-from app.vision.postprocessor import LayoutPostProcessor  # MAKE SURE THIS IS IMPORTED
+from app.vision.postprocessor import LayoutPostProcessor
 from app.vision.schema import PageLayout, DocumentLayout
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["layout"])  # ADD prefix here
+router = APIRouter(prefix="/layout", tags=["layout"])
 
 
 class LayoutAnalyzer:
@@ -38,7 +40,7 @@ class LayoutAnalyzer:
             from app.vision.detector import LayoutDetector
             self.detector = LayoutDetector(self.model_loader)
         
-        # Initialize postprocessor - THIS WAS MISSING!
+        # Initialize postprocessor
         self.postprocessor = LayoutPostProcessor()
         
         logger.info(f"LayoutAnalyzer initialized with model: {self.model_loader.model_path}")
@@ -107,7 +109,7 @@ class LayoutAnalyzer:
                     detections=cleaned_detections
                 )
                 
-                # Save individual page layout
+                # Save individual page layout (for OCR compatibility)
                 layout_path = layout_dir / f"page_{page_num}_layout.json"
                 with open(layout_path, "w", encoding="utf-8") as f:
                     json_str = page_layout.model_dump_json(indent=2)
@@ -123,6 +125,7 @@ class LayoutAnalyzer:
                 pages=page_layouts
             )
             
+            # Save document layout summary (for future phases)
             summary_path = layout_dir / "document_layout_summary.json"
             with open(summary_path, "w", encoding="utf-8") as f:
                 json_str = document_layout.model_dump_json(indent=2)
@@ -133,6 +136,7 @@ class LayoutAnalyzer:
                 processing_file.unlink()
             
             logger.info(f"Layout analysis complete for document {document_id}")
+            logger.info(f"Saved {len(page_layouts)} per-page layout files and document_layout_summary.json")
             return document_layout
             
         except Exception as e:
@@ -165,6 +169,8 @@ class LayoutAnalyzer:
             
             if pages_dir.exists():
                 page_images = list(pages_dir.glob("*.png"))
+                page_layouts = []
+                
                 for page_num, image_path in enumerate(page_images, 1):
                     # Create empty page layout
                     empty_layout = PageLayout(
@@ -175,15 +181,18 @@ class LayoutAnalyzer:
                         detections=[]
                     )
                     
+                    # Save individual page layout file
                     layout_path = layout_dir / f"page_{page_num}_layout.json"
                     with open(layout_path, "w", encoding="utf-8") as f:
                         json_str = empty_layout.model_dump_json(indent=2)
                         f.write(json_str)
+                    
+                    page_layouts.append(empty_layout)
                 
-                # Create empty summary
+                # Create empty document summary
                 empty_doc_layout = DocumentLayout(
                     document_id=document_id,
-                    pages=[]
+                    pages=page_layouts
                 )
                 
                 summary_path = layout_dir / "document_layout_summary.json"
@@ -224,7 +233,15 @@ class LayoutAnalyzer:
         # Check for summary file
         summary_path = layout_dir / "document_layout_summary.json"
         if summary_path.exists():
-            return {"status": "completed", "document_id": str(document_id)}
+            # Also check for per-page files
+            layout_files = list(layout_dir.glob("page_*_layout.json"))
+            return {
+                "status": "completed", 
+                "document_id": str(document_id),
+                "has_summary_file": True,
+                "has_per_page_files": len(layout_files) > 0,
+                "per_page_files_count": len(layout_files)
+            }
         
         # Check for individual page layouts
         layout_files = list(layout_dir.glob("page_*_layout.json"))
@@ -268,8 +285,13 @@ async def analyze_document_layout(
     if status_info["status"] == "completed":
         return {
             "message": f"Document {document_id} already processed",
-            "document_id": document_id,
-            "status": "already_completed"
+            "document_id": str(document_id),
+            "status": "already_completed",
+            "files_created": {
+                "summary_file": status_info.get("has_summary_file", False),
+                "per_page_files": status_info.get("has_per_page_files", False),
+                "per_page_count": status_info.get("per_page_files_count", 0)
+            }
         }
     
     # Add to background tasks
@@ -277,8 +299,9 @@ async def analyze_document_layout(
     
     return {
         "message": f"Layout analysis started for document {document_id}",
-        "document_id": document_id,
-        "status": "processing_started"
+        "document_id": str(document_id),
+        "status": "processing_started",
+        "note": "Layout analysis will create both per-page layout files and a document summary"
     }
 
 
@@ -356,3 +379,86 @@ async def get_model_info():
     """Get information about the loaded YOLO model."""
     model_info = analyzer.model_loader.get_model_info()
     return model_info
+
+
+@router.get("/debug/files/{document_id}")
+async def debug_layout_files(document_id: uuid.UUID):
+    """Debug endpoint to see layout files structure."""
+    layout_dir = settings.DOCUMENTS_DIR / str(document_id) / "layout"
+    
+    if not layout_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Layout directory not found for document {document_id}"
+        )
+    
+    result = {
+        "document_id": str(document_id),
+        "layout_dir": str(layout_dir.absolute()),
+        "files": {}
+    }
+    
+    # List all files
+    all_files = list(layout_dir.glob("*"))
+    result["total_files"] = len(all_files)
+    
+    # Categorize files
+    json_files = list(layout_dir.glob("*.json"))
+    page_files = list(layout_dir.glob("page_*_layout.json"))
+    summary_files = list(layout_dir.glob("document_layout_summary.json"))
+    other_files = list(layout_dir.glob("*"))
+    
+    # Remove json files from other files
+    other_files = [f for f in other_files if f not in json_files]
+    
+    result["files"]["json_files"] = {
+        "count": len(json_files),
+        "names": [f.name for f in sorted(json_files)]
+    }
+    
+    result["files"]["page_layout_files"] = {
+        "count": len(page_files),
+        "names": [f.name for f in sorted(page_files, key=lambda x: int(x.stem.split('_')[1]) if len(x.stem.split('_')) > 1 and x.stem.split('_')[1].isdigit() else 0)],
+        "sample_structure": None
+    }
+    
+    result["files"]["summary_file"] = {
+        "exists": len(summary_files) > 0,
+        "name": summary_files[0].name if summary_files else None
+    }
+    
+    result["files"]["other_files"] = {
+        "count": len(other_files),
+        "names": [f.name for f in sorted(other_files)]
+    }
+    
+    # Show sample structure if page files exist
+    if page_files:
+        try:
+            with open(page_files[0], "r", encoding="utf-8") as f:
+                sample_data = json.load(f)
+                result["files"]["page_layout_files"]["sample_structure"] = {
+                    "keys": list(sample_data.keys()),
+                    "has_page_number": "page_number" in sample_data,
+                    "page_number": sample_data.get("page_number"),
+                    "has_image_path": "image_path" in sample_data,
+                    "has_detections": "detections" in sample_data,
+                    "detections_count": len(sample_data.get("detections", [])) if "detections" in sample_data else 0
+                }
+        except Exception as e:
+            result["files"]["page_layout_files"]["sample_error"] = str(e)
+    
+    # Show summary structure if exists
+    if summary_files:
+        try:
+            with open(summary_files[0], "r", encoding="utf-8") as f:
+                summary_data = json.load(f)
+                result["files"]["summary_file"]["structure"] = {
+                    "keys": list(summary_data.keys()),
+                    "has_pages": "pages" in summary_data,
+                    "pages_count": len(summary_data.get("pages", [])) if "pages" in summary_data else 0
+                }
+        except Exception as e:
+            result["files"]["summary_file"]["error"] = str(e)
+    
+    return result

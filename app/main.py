@@ -1,22 +1,6 @@
 """
-Main FastAPI application - WITH COMPATIBILITY FIXES
+Main FastAPI application - Complete with routing fix
 """
-
-# 1. Apply NumPy compatibility fix FIRST
-try:
-    from app.compat.numpy_fix import *
-except ImportError:
-    # Inline fix if module not found
-    import numpy as np
-    if not hasattr(np, 'sctypes'):
-        np.sctypes = {
-            'int': [np.int8, np.int16, np.int32, np.int64],
-            'uint': [np.uint8, np.uint16, np.uint32, np.uint64],
-            'float': [np.float16, np.float32, np.float64],
-            'complex': [np.complex64, np.complex128],
-            'others': [bool, object, bytes, str, np.void]
-        }
-
 import os
 import sys
 from pathlib import Path
@@ -24,7 +8,6 @@ from pathlib import Path
 # ============================================================================
 # POLLER PATH FIX FOR WINDOWS
 # ============================================================================
-# Add poppler to PATH at startup to ensure pdf2image can find it
 poppler_paths_to_check = [
     r"C:\Users\surya\Downloads\Release-25.12.0-0\poppler-25.12.0\Library\bin",
     r"C:\poppler\bin",
@@ -43,14 +26,13 @@ else:
     print("⚠ Warning: Poppler not found in common locations. Please set POPPLER_PATH in .env file")
 
 # ============================================================================
-# SET ENVIRONMENT VARIABLES TO PREVENT TRAINING
+# SET ENVIRONMENT VARIABLES
 # ============================================================================
 os.environ['YOLO_VERBOSE'] = 'False'
 os.environ['DISABLE_MODEL_SOURCE_CHECK'] = 'True'
 os.environ['ULTRA_VERBOSE'] = 'False'
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
-# Suppress warnings
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -77,7 +59,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -123,7 +105,7 @@ async def health_check():
     }
 
 # ============================================================================
-# LAZY LOAD ALL ROUTERS
+# LAZY LOAD ALL ROUTERS - FIXED VERSION
 # ============================================================================
 @app.on_event("startup")
 async def startup_event():
@@ -132,23 +114,32 @@ async def startup_event():
     print("DEBUG: Loading all routers...")
     print("="*60)
     
-    # Phase 2: Layout Analysis
+    # Phase 2: Layout Analysis - FIXED: Router already has /layout prefix
     try:
         from app.api.layout import router as layout_router
-        app.include_router(layout_router, prefix="/layout", tags=["layout"])
+        app.include_router(layout_router)  # FIXED: No duplicate prefix
         print("✅ Phase 2 (Layout Analysis) router loaded")
         print(f"   Routes: {len(layout_router.routes)}")
+        
+        # Debug: Print layout routes
+        for route in layout_router.routes:
+            if hasattr(route, "path"):
+                print(f"   - {route.path}")
     except Exception as e:
         print(f"⚠️  Phase 2 router failed: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Phase 3: OCR
     try:
         from app.api.ocr import router as ocr_router
-        app.include_router(ocr_router)  # No prefix needed
+        app.include_router(ocr_router)  # Already has /ocr prefix
         print("✅ Phase 3 (OCR) router loaded")
         print(f"   Routes: {len(ocr_router.routes)}")
     except Exception as e:
         print(f"⚠️  Phase 3 router failed: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Phase 4: Multi-Modal Agents
     try:
@@ -171,6 +162,12 @@ async def startup_event():
     print("="*60)
     print("All routers loaded")
     print("="*60 + "\n")
+    
+    # Print all registered routes for debugging
+    print("DEBUG: All registered routes in app:")
+    for route in app.routes:
+        if hasattr(route, "methods"):
+            print(f"  {route.path} - {list(route.methods)}")
 
 # ============================================================================
 # INFORMATION ENDPOINTS
