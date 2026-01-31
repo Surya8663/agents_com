@@ -4,6 +4,7 @@ LangGraph orchestration for multi-agent workflow - REAL DATA ONLY.
 import logging
 import time
 import uuid
+from datetime import datetime
 from typing import TypedDict, Annotated, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint import MemorySaver
@@ -27,6 +28,8 @@ class AgentState(TypedDict):
     validation_result: Dict[str, Any]
     errors: List[str]
     current_agent: str
+    start_time: float  # ADDED: Track start time
+    agent_results: Dict[str, Dict[str, Any]]  # ADDED: Store all agent results
 
 
 class AgentOrchestrator:
@@ -79,11 +82,12 @@ class AgentOrchestrator:
             
             result = await self.vision_agent.process(inputs)
             
-            logger.info(f"✅ Vision Agent completed")
+            logger.info(f"✅ Vision Agent completed - Confidence: {result.get('spatial_confidence', 0.0):.2f}")
             return {
                 **state,
                 "vision_analysis": result,
-                "current_agent": "vision_agent"
+                "current_agent": "vision_agent",
+                "agent_results": {**state.get("agent_results", {}), "vision": result}
             }
             
         except Exception as e:
@@ -91,8 +95,9 @@ class AgentOrchestrator:
             return {
                 **state,
                 "errors": state.get("errors", []) + [f"Vision Agent: {str(e)}"],
-                "vision_analysis": {"error": str(e)},
-                "current_agent": "vision_agent"
+                "vision_analysis": {"error": str(e), "agent": "vision_agent", "fallback_mode": True},
+                "current_agent": "vision_agent",
+                "agent_results": {**state.get("agent_results", {}), "vision": {"error": str(e)}}
             }
     
     async def _run_text_agent(self, state: AgentState) -> AgentState:
@@ -107,11 +112,15 @@ class AgentOrchestrator:
             
             result = await self.text_agent.process(inputs)
             
-            logger.info(f"✅ Text Agent completed - Document type: {result.get('document_type', 'unknown')}")
+            doc_type = result.get('document_type', 'unknown')
+            logger.info(f"✅ Text Agent completed - Document type: {doc_type}")
+            logger.info(f"   Semantic confidence: {result.get('semantic_confidence', 0.0):.2f}")
+            
             return {
                 **state,
                 "text_analysis": result,
-                "current_agent": "text_agent"
+                "current_agent": "text_agent",
+                "agent_results": {**state.get("agent_results", {}), "text": result}
             }
             
         except Exception as e:
@@ -119,8 +128,9 @@ class AgentOrchestrator:
             return {
                 **state,
                 "errors": state.get("errors", []) + [f"Text Agent: {str(e)}"],
-                "text_analysis": {"error": str(e)},
-                "current_agent": "text_agent"
+                "text_analysis": {"error": str(e), "agent": "text_agent", "fallback_mode": True},
+                "current_agent": "text_agent",
+                "agent_results": {**state.get("agent_results", {}), "text": {"error": str(e)}}
             }
     
     async def _run_fusion_agent(self, state: AgentState) -> AgentState:
@@ -128,21 +138,30 @@ class AgentOrchestrator:
         try:
             logger.info("🤝 Running Fusion Agent...")
             
+            # Ensure we have the required inputs
+            if "vision_analysis" not in state or not state["vision_analysis"]:
+                state["vision_analysis"] = {"error": "Missing vision analysis", "fallback_mode": True}
+            if "text_analysis" not in state or not state["text_analysis"]:
+                state["text_analysis"] = {"error": "Missing text analysis", "fallback_mode": True}
+            
             inputs = {
                 "document_id": state["document_id"],
                 "vision_analysis": state["vision_analysis"],
                 "text_analysis": state["text_analysis"],
-                "layout_data": state["layout_data"],
-                "ocr_data": state["ocr_data"]
+                "layout_data": state.get("layout_data", {}),
+                "ocr_data": state.get("ocr_data", {})
             }
             
             result = await self.fusion_agent.process(inputs)
             
-            logger.info(f"✅ Fusion Agent completed - Confidence: {result.get('fusion_confidence', 0.0):.2f}")
+            fusion_conf = result.get('fusion_confidence', 0.0)
+            logger.info(f"✅ Fusion Agent completed - Confidence: {fusion_conf:.2f}")
+            
             return {
                 **state,
                 "fused_document": result,
-                "current_agent": "fusion_agent"
+                "current_agent": "fusion_agent",
+                "agent_results": {**state.get("agent_results", {}), "fusion": result}
             }
             
         except Exception as e:
@@ -150,8 +169,9 @@ class AgentOrchestrator:
             return {
                 **state,
                 "errors": state.get("errors", []) + [f"Fusion Agent: {str(e)}"],
-                "fused_document": {"error": str(e)},
-                "current_agent": "fusion_agent"
+                "fused_document": {"error": str(e), "agent": "fusion_agent", "fallback_mode": True},
+                "current_agent": "fusion_agent",
+                "agent_results": {**state.get("agent_results", {}), "fusion": {"error": str(e)}}
             }
     
     async def _run_validation_agent(self, state: AgentState) -> AgentState:
@@ -159,20 +179,27 @@ class AgentOrchestrator:
         try:
             logger.info("✅ Running Validation Agent...")
             
+            # Ensure we have required inputs
+            if "fused_document" not in state or not state["fused_document"]:
+                state["fused_document"] = {"error": "Missing fused document", "fallback_mode": True}
+            
             inputs = {
                 "document_id": state["document_id"],
                 "fused_document": state["fused_document"],
-                "vision_analysis": state["vision_analysis"],
-                "text_analysis": state["text_analysis"]
+                "vision_analysis": state.get("vision_analysis", {}),
+                "text_analysis": state.get("text_analysis", {})
             }
             
             result = await self.validation_agent.process(inputs)
             
-            logger.info(f"✅ Validation Agent completed - Overall confidence: {result.get('overall_confidence', 0.0):.2f}")
+            overall_conf = result.get('overall_confidence', 0.0)
+            logger.info(f"✅ Validation Agent completed - Overall confidence: {overall_conf:.2f}")
+            
             return {
                 **state,
                 "validation_result": result,
-                "current_agent": "validation_agent"
+                "current_agent": "validation_agent",
+                "agent_results": {**state.get("agent_results", {}), "validation": result}
             }
             
         except Exception as e:
@@ -180,8 +207,9 @@ class AgentOrchestrator:
             return {
                 **state,
                 "errors": state.get("errors", []) + [f"Validation Agent: {str(e)}"],
-                "validation_result": {"error": str(e)},
-                "current_agent": "validation_agent"
+                "validation_result": {"error": str(e), "agent": "validation_agent", "fallback_mode": True},
+                "current_agent": "validation_agent",
+                "agent_results": {**state.get("agent_results", {}), "validation": {"error": str(e)}}
             }
     
     async def run(self, document_id: str, layout_data: Dict[str, Any], 
@@ -209,7 +237,9 @@ class AgentOrchestrator:
             fused_document={},
             validation_result={},
             errors=[],
-            current_agent="start"
+            current_agent="start",
+            start_time=time.time(),
+            agent_results={}
         )
         
         try:
@@ -219,7 +249,8 @@ class AgentOrchestrator:
             # Compile final result
             result = self._compile_final_result(final_state)
             
-            logger.info(f"🎉 Agent workflow completed for {document_id}")
+            elapsed_time = time.time() - initial_state["start_time"]
+            logger.info(f"🎉 Agent workflow completed for {document_id} in {elapsed_time:.2f}s")
             return result
             
         except Exception as e:
@@ -229,33 +260,44 @@ class AgentOrchestrator:
     def _compile_final_result(self, state: AgentState) -> Dict[str, Any]:
         """Compile final result from workflow state."""
         # Determine status
-        if state.get("errors"):
+        errors = state.get("errors", [])
+        if errors:
             status = "completed_with_errors"
+            logger.warning(f"Workflow completed with {len(errors)} errors")
         else:
             status = "completed"
         
         # Get which agents actually executed
         agents_executed = []
-        if state.get("vision_analysis") and not state["vision_analysis"].get("error"):
+        vision_result = state.get("vision_analysis", {})
+        text_result = state.get("text_analysis", {})
+        fusion_result = state.get("fused_document", {})
+        validation_result = state.get("validation_result", {})
+        
+        if vision_result and not vision_result.get("error"):
             agents_executed.append("vision_agent")
-        if state.get("text_analysis") and not state["text_analysis"].get("error"):
+        if text_result and not text_result.get("error"):
             agents_executed.append("text_agent")
-        if state.get("fused_document") and not state["fused_document"].get("error"):
+        if fusion_result and not fusion_result.get("error"):
             agents_executed.append("fusion_agent")
-        if state.get("validation_result") and not state["validation_result"].get("error"):
+        if validation_result and not validation_result.get("error"):
             agents_executed.append("validation_agent")
+        
+        # Create final output
+        final_output = self._create_final_output(state)
         
         return {
             "document_id": state["document_id"],
             "status": status,
             "agents_executed": agents_executed,
-            "vision_analysis": state.get("vision_analysis", {}),
-            "text_analysis": state.get("text_analysis", {}),
-            "fused_document": state.get("fused_document", {}),
-            "validation_result": state.get("validation_result", {}),
-            "errors": state.get("errors", []),
-            "final_output": self._create_final_output(state),
-            "timestamp": self._get_timestamp()
+            "vision_analysis": vision_result,
+            "text_analysis": text_result,
+            "fused_document": fusion_result,
+            "validation_result": validation_result,
+            "errors": errors,
+            "final_output": final_output,
+            "agent_results": state.get("agent_results", {}),
+            "timestamp": datetime.now().isoformat() if 'datetime' in globals() else time.ctime()
         }
     
     def _create_final_output(self, state: AgentState) -> Dict[str, Any]:
@@ -275,7 +317,7 @@ class AgentOrchestrator:
                 if isinstance(value_info, dict):
                     # Format: {"key": {"value": "actual", "multi_modal_confidence": 0.9}}
                     extracted_fields[key] = {
-                        "value": value_info.get("value", value_info),
+                        "value": value_info.get("value", str(value_info)),
                         "confidence": value_info.get("multi_modal_confidence", 
                                                     fused_doc.get("fusion_confidence", 0.0)),
                         "source": "multi_modal_fusion"
@@ -283,7 +325,7 @@ class AgentOrchestrator:
                 else:
                     # Format: {"key": "actual_value"}
                     extracted_fields[key] = {
-                        "value": value_info,
+                        "value": str(value_info),
                         "confidence": fused_doc.get("fusion_confidence", 0.0),
                         "source": "fusion_agent"
                     }
@@ -295,7 +337,7 @@ class AgentOrchestrator:
                 logger.info(f"📊 Using {len(key_value_pairs)} text analysis extractions")
                 for key, value in key_value_pairs.items():
                     extracted_fields[key] = {
-                        "value": value,
+                        "value": str(value),
                         "confidence": text_analysis.get("semantic_confidence", 0.0),
                         "source": "text_agent"
                     }
@@ -305,9 +347,9 @@ class AgentOrchestrator:
             key_entities = text_analysis.get("key_entities", {})
             if key_entities and isinstance(key_entities, dict):
                 for entity_type, entities in key_entities.items():
-                    if entities and isinstance(entities, list):
+                    if entities and isinstance(entities, list) and entities:
                         extracted_fields[entity_type] = {
-                            "value": entities[0] if entities else "",
+                            "value": str(entities[0]),
                             "confidence": text_analysis.get("semantic_confidence", 0.0),
                             "source": "text_agent_entities"
                         }
@@ -324,6 +366,17 @@ class AgentOrchestrator:
             validation_notes = explainability_notes
         elif explainability_notes:
             validation_notes = [str(explainability_notes)]
+        
+        # Add validation passed/failed notes
+        passed = validation.get("validation_passed", [])
+        failed = validation.get("validation_failed", [])
+        
+        if passed:
+            validation_notes.append(f"Passed checks: {', '.join(passed[:3])}" + 
+                                  (f" and {len(passed)-3} more" if len(passed) > 3 else ""))
+        if failed:
+            validation_notes.append(f"Failed checks: {', '.join(failed[:3])}" + 
+                                  (f" and {len(failed)-3} more" if len(failed) > 3 else ""))
         
         # Get document type from multiple sources
         document_type = "unknown"
@@ -358,7 +411,8 @@ class AgentOrchestrator:
                 }
             },
             "document_type": document_type,
-            "processing_errors": state.get("errors", [])
+            "processing_errors": state.get("errors", []),
+            "timestamp": datetime.now().isoformat() if 'datetime' in globals() else time.ctime()
         }
     
     def _extract_vision_regions(self, layout_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -367,15 +421,19 @@ class AgentOrchestrator:
         
         if "pages" in layout_data:
             for page in layout_data["pages"]:
-                for det in page.get("detections", []):
+                page_num = page.get("page_number", 1)
+                detections = page.get("detections", [])
+                
+                for i, det in enumerate(detections):
                     regions.append({
-                        "type": det.get("type", "unknown"),
+                        "region_id": f"p{page_num}_r{i}",
+                        "type": det.get("type", det.get("label", "unknown")),
                         "bbox": det.get("bbox", {}),
                         "confidence": det.get("confidence", 0.0),
-                        "page": page.get("page_number", 1)
+                        "page": page_num
                     })
         
-        return regions
+        return regions[:20]  # Limit to 20 regions
     
     def _extract_ocr_sources(self, ocr_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract OCR sources for traceability."""
@@ -383,20 +441,26 @@ class AgentOrchestrator:
         
         if "pages" in ocr_data:
             for page in ocr_data["pages"]:
-                for region in page.get("regions", []):
+                page_num = page.get("page_number", 1)
+                regions = page.get("regions", [])
+                
+                for i, region in enumerate(regions):
                     text = region.get("ocr_text", "")
-                    if text and len(str(text).strip()) > 0:
+                    if text and str(text).strip():
                         sources.append({
-                            "text_preview": str(text)[:100] + "..." if len(str(text)) > 100 else str(text),
+                            "region_id": f"p{page_num}_r{i}",
+                            "text_preview": str(text)[:80] + "..." if len(str(text)) > 80 else str(text),
                             "confidence": region.get("ocr_confidence", 0.0),
-                            "page": page.get("page_number", 1),
+                            "page": page_num,
                             "region_type": region.get("type", "unknown")
                         })
         
-        return sources
+        return sources[:20]  # Limit to 20 sources
     
     def _create_error_result(self, document_id: str, error: str) -> Dict[str, Any]:
         """Create error result when workflow fails."""
+        from datetime import datetime
+        
         return {
             "document_id": document_id,
             "status": "failed",
@@ -409,15 +473,11 @@ class AgentOrchestrator:
                 "validation_notes": [f"Workflow failed: {error}"],
                 "traceability": {},
                 "document_type": "unknown",
-                "processing_errors": [error]
+                "processing_errors": [error],
+                "timestamp": datetime.now().isoformat()
             },
-            "timestamp": self._get_timestamp()
+            "timestamp": datetime.now().isoformat()
         }
-    
-    def _get_timestamp(self) -> str:
-        """Get current timestamp."""
-        from datetime import datetime
-        return datetime.now().isoformat()
 
 
 # Global orchestrator instance
